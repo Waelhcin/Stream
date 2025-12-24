@@ -29,16 +29,17 @@ def fast_to_minutes(val):
     return 0
 
 # --- CORE OPTIMIZATION: LOAD & REFINE ONCE ---
-@st.cache_data(show_spinner="Refining and loading data...")
+@st.cache_data(show_spinner="Refining and loading all data...")
 def load_all_and_refine(file_bytes):
     """
-    Reads all sheets once, filters for only target columns immediately, 
-    and caches the result to make filtering instant.
+    Reads all sheets, filters for only target columns immediately to save memory,
+    and calculates combined metrics like HIT, Total Accel, and Total Decel.
     """
+    # These are the specific columns required for calculations and display
     target_cols = [
         'Velocity Band 3 Total Distance (m)', 'Velocity Band 4 Total Distance (m)', 'Velocity Band 5 Total Distance (m)',
         'Acceleration B1 Efforts (Gen 2)', 'Acceleration B2 Efforts (Gen 2)', 'Acceleration B3 Efforts (Gen 2)',
-        'decceleration B1 Efforts (Gen 2)', 'decceleration B2 Efforts (Gen 2)', 'decceleration B3 Efforts (Gen 2)',
+        'Deceleration B1 Efforts (Gen 2)', 'Deceleration B2 Efforts (Gen 2)', 'Deceleration B3 Efforts (Gen 2)',
         'Maximum Velocity (km/h)', 'Total Player Load', 'Meterage Per Minute', 'Total Distance (m)', 'Sprint'
     ]
     id_cols = ['Name', 'Journnée', 'adversaire']
@@ -49,7 +50,7 @@ def load_all_and_refine(file_bytes):
             df = xl.parse(sheet)
             df.columns = [str(col).strip() for col in df.columns]
             
-            # REFINE: Keep only necessary columns that exist
+            # REFINE: Keep only necessary columns early
             existing_targets = [c for c in target_cols if c in df.columns]
             existing_ids = [c for c in id_cols if c in df.columns]
             df = df[existing_ids + existing_targets].copy()
@@ -71,16 +72,24 @@ def load_all_and_refine(file_bytes):
     if not all_data: return pd.DataFrame()
     merged_df = pd.concat(all_data, ignore_index=True)
     
-    # Pre-calculate Metrics
-    if all(c in merged_df.columns for c in ['Velocity Band 3 Total Distance (m)', 'Velocity Band 4 Total Distance (m)', 'Velocity Band 5 Total Distance (m)']):
-        merged_df['HIT'] = merged_df[['Velocity Band 3 Total Distance (m)', 'Velocity Band 4 Total Distance (m)', 'Velocity Band 5 Total Distance (m)']].sum(axis=1)
+    # --- METRIC CALCULATIONS ---
     
-    acc_cols = [c for c in ['Acceleration B1 Efforts (Gen 2)', 'Acceleration B2 Efforts (Gen 2)', 'Acceleration B3 Efforts (Gen 2)'] if c in merged_df.columns]
-    if acc_cols: merged_df['Total Acceleration'] = merged_df[acc_cols].sum(axis=1)
+    # 1. HIT
+    hit_src = ['Velocity Band 3 Total Distance (m)', 'Velocity Band 4 Total Distance (m)', 'Velocity Band 5 Total Distance (m)']
+    if all(c in merged_df.columns for c in hit_src):
+        merged_df['HIT'] = merged_df[hit_src].sum(axis=1)
+    
+    # 2. Total Acceleration
+    acc_src = ['Acceleration B1 Efforts (Gen 2)', 'Acceleration B2 Efforts (Gen 2)', 'Acceleration B3 Efforts (Gen 2)']
+    if all(c in merged_df.columns for c in acc_src):
+        merged_df['Total Acceleration'] = merged_df[acc_src].sum(axis=1)
 
-    dec_cols = [c for c in ['decceleration B1 Efforts (Gen 2)', 'decceleration B2 Efforts (Gen 2)', 'decceleration B3 Efforts (Gen 2)'] if c in merged_df.columns]
-    if dec_cols: merged_df['Total Decceleration'] = merged_df[dec_cols].sum(axis=1)
+    # 3. Total Deceleration (AS REQUESTED)
+    dec_src = ['Deceleration B1 Efforts (Gen 2)', 'Deceleration B2 Efforts (Gen 2)', 'Deceleration B3 Efforts (Gen 2)']
+    if all(c in merged_df.columns for c in dec_src):
+        merged_df['Total Deceleration'] = merged_df[dec_src].sum(axis=1)
 
+    # Create the Match Label for X-Axis
     merged_df['Match_Label'] = "J" + merged_df['Journnée'].astype(str) + "\n" + merged_df['adversaire'].astype(str)
     
     return merged_df
@@ -91,7 +100,7 @@ st.title("⚽ Sport Science Analytics Hub")
 uploaded_file = st.sidebar.file_uploader("Upload XLSX", type=["xlsx"])
 
 if uploaded_file:
-    # This happens once and is cached
+    # Load all sheets and refine columns once (Cached)
     full_df = load_all_and_refine(uploaded_file.getvalue())
     sheet_names = list(full_df['Sheet_Segment'].unique())
     
@@ -116,8 +125,9 @@ if uploaded_file:
     distinct_players = sorted(filtered_df['Name'].unique())
     selected_players = st.sidebar.multiselect("Select Players:", distinct_players)
     
+    # List of metrics including the new Total Deceleration
     metrics_list = ['Maximum Velocity (km/h)', 'HIT', 'Total Player Load', 'Meterage Per Minute', 
-                    'Total Acceleration', 'Total Decceleration', 'Total Distance (m)', 'Sprint']
+                    'Total Acceleration', 'Total Deceleration', 'Total Distance (m)', 'Sprint']
     available_metrics = [m for m in metrics_list if m in filtered_df.columns]
     selected_metrics = st.sidebar.multiselect("Select Metrics:", available_metrics, default=available_metrics[:4])
     
@@ -137,11 +147,13 @@ if uploaded_file:
                     p_data = filtered_df[filtered_df['Name'] == player].copy()
                     
                     if x_col == 'Sheet_Segment':
+                        # Aggregate by Sheet (Average)
                         display_data = p_data.groupby('Sheet_Segment', sort=False)[selected_metrics].mean().reset_index()
                         display_data['Sheet_Segment'] = pd.Categorical(display_data['Sheet_Segment'], categories=selected_sheets, ordered=True)
                         display_data = display_data.sort_values('Sheet_Segment')
                         main_title = f"Performance Analysis: {player}"
                     else:
+                        # Individual Matches
                         display_data = p_data.sort_values(by='Match_Label').reset_index(drop=True)
                         main_title = f"Performance Analysis: {player}\nSheet: {single_sheet}"
                     
@@ -161,11 +173,11 @@ if uploaded_file:
                         
                         y_mean, y_max, y_min = y.mean(), y.max(), y.min()
 
-                        # Plot line
+                        # Main Plot
                         ax.plot(wrapped_x, y, color=chart_color, linewidth=2.5, marker='o', markersize=6, alpha=0.8)
                         ax.axhline(y_mean, color='gray', linestyle='--', alpha=0.5, linewidth=1.5)
                         
-                        # Highlighting Max/Min
+                        # Max/Min Points
                         for idx, val in enumerate(y):
                             if val == y_max: ax.scatter(wrapped_x[idx], val, color='#2ecc71', s=120, zorder=5, edgecolors='black')
                             elif val == y_min: ax.scatter(wrapped_x[idx], val, color='#e74c3c', s=120, zorder=5, edgecolors='black')
@@ -174,13 +186,13 @@ if uploaded_file:
                             for xi, yi in zip(wrapped_x, y):
                                 ax.text(xi, yi, f'{yi:.1f}', fontweight='bold', ha='center', va='bottom', fontsize=9, color='#333')
 
-                        # Styling
+                        # Axes Styling
                         ax.spines['top'].set_visible(False)
                         ax.spines['right'].set_visible(False)
                         ax.grid(True, axis='y', linestyle=':', alpha=0.4)
                         ax.set_facecolor('#fafafa')
                         
-                        # RESTORED LEGEND
+                        # Legend
                         handles = [
                             Line2D([0], [0], color=chart_color, lw=2, marker='o', label='Trend'),
                             Line2D([0], [0], color='gray', ls='--', label=f'Avg: {y_mean:.1f}'),
