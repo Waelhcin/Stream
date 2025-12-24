@@ -96,14 +96,13 @@ if uploaded_file:
     
     x_col = st.sidebar.selectbox("Display on X-Axis:", ['Sheet_Segment', 'Match_Label'])
 
-    # --- UPDATED SELECTION LOGIC ---
     if x_col == 'Sheet_Segment':
         # MULTI CHOICE for Sheet Segment mode
         selected_sheets = st.sidebar.multiselect("Select Sheets (X-Axis Segments):", sheet_names, default=[sheet_names[0]])
     else:
         # SINGLE CHOICE for Match Label mode
         single_sheet = st.sidebar.selectbox("Select Data Source (Sheet):", sheet_names)
-        selected_sheets = [single_sheet] # Wrap in list for processing
+        selected_sheets = [single_sheet]
 
     if not selected_sheets:
         st.warning("Please select a data source.")
@@ -135,13 +134,17 @@ if uploaded_file:
         else:
             pdf_buffer = io.BytesIO()
             with PdfPages(pdf_buffer) as pdf:
-                # Create labels based on mode
-                segments_label = "Segments" if x_col == 'Sheet_Segment' else "Sheet Source"
                 segments_str = ", ".join(selected_sheets)
 
                 for player in selected_players:
-                    st.header(f"👤 Player: {player}")
-                    st.caption(f"{segments_label}: {segments_str}")
+                    # Logic for Streamlit Headers and Plot Main Titles
+                    if x_col == 'Sheet_Segment':
+                        st.header(f"👤 Player: {player}")
+                        main_title = f"Performance Analysis: {player}"
+                    else:
+                        st.header(f"👤 Player: {player}")
+                        st.caption(f"Period: {segments_str}")
+                        main_title = f"Performance Analysis: {player}\nPeriod: {segments_str}"
                     
                     p_data = filtered_df[filtered_df['Name'] == player].copy()
                     
@@ -160,8 +163,7 @@ if uploaded_file:
                     fig, axes = plt.subplots(len(selected_metrics), 1, figsize=(14, 5 * len(selected_metrics)))
                     if len(selected_metrics) == 1: axes = [axes]
                     
-                    # Title including Player and Selection
-                    main_title = f"Performance Analysis: {player}\nPeriod: {segments_str}"
+                    # Apply the main title based on the logic above
                     fig.suptitle(main_title, fontsize=18, fontweight='bold', y=0.99)
 
                     for i, metric in enumerate(selected_metrics):
