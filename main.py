@@ -5,6 +5,7 @@ from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.lines import Line2D
 import io
 import datetime
+import textwrap
 
 # --- PAGE CONFIG ---
 st.set_page_config(page_title="Performance Analytics Pro", layout="wide")
@@ -73,40 +74,34 @@ if uploaded_file:
     # Merge all selected sheets
     merged_df = pd.concat(all_data_list, ignore_index=True)
 
-    # CALCULATE METRICS
+    # CALCULATE METRICS (Fixed Syntax Error here)
     calc_dict = {}
-    
+    current_cols = merged_df.columns
+
     hit_src = ['Velocity Band 3 Total Distance (m)', 'Velocity Band 4 Total Distance (m)', 'Velocity Band 5 Total Distance (m)']
-    if all(c in merged_df.columns for c in hit_src):
+    if all(c in current_cols for c in hit_src):
         calc_dict['HIT'] = merged_df[hit_src].sum(axis=1)
     
     acc_cols = ['Acceleration B1 Efforts (Gen 2)', 'Acceleration B2 Efforts (Gen 2)', 'Acceleration B3 Efforts (Gen 2)']
-    if all(c in merged_df.columns for c in acc_cols):
+    if all(c in current_cols for c in acc_cols):
         calc_dict['Total Acceleration'] = merged_df[acc_cols].sum(axis=1)
 
     dec_cols = ['decceleration B1 Efforts (Gen 2)', 'decceleration B2 Efforts (Gen 2)', 'decceleration B3 Efforts (Gen 2)']
-    if all(c in merged_df.columns for c in dec_cols):
+    if all(c in current_cols for c in dec_cols):
         calc_dict['Total Decceleration'] = merged_df[dec_cols].sum(axis=1)
 
-    # REFINED MATCH LABEL: Strictly distinct by stripping inputs
+    # Label Formatting
     j_str = merged_df['Journnée'].astype(str).str.strip()
     adv_str = merged_df['adversaire'].fillna('').astype(str).str.strip()
     calc_dict['Match_Label'] = "J" + j_str + "\n" + adv_str
     
+    # Assign everything at once to prevent fragmentation
     merged_df = merged_df.assign(**calc_dict).copy()
 
-    # 3. FILTER BY MATCHES (Ensuring distinct values)
+    # 3. FILTER BY MATCHES (Strictly distinct)
     st.sidebar.markdown("---")
-    # Using set/unique to ensure even if sheets overlap, the labels are distinct in the filter
     distinct_matches = sorted(list(merged_df['Match_Label'].unique()))
-    
-    selected_filter_matches = st.sidebar.multiselect(
-        "Filter by Matches:", 
-        distinct_matches, 
-        default=distinct_matches
-    )
-    
-    # Filter original DF
+    selected_filter_matches = st.sidebar.multiselect("Filter by Matches:", distinct_matches, default=distinct_matches)
     filtered_df = merged_df[merged_df['Match_Label'].isin(selected_filter_matches)]
 
     # 4. SELECT PLAYERS
@@ -131,66 +126,71 @@ if uploaded_file:
             with PdfPages(pdf_buffer) as pdf:
                 for player in selected_players:
                     st.header(f"👤 Player: {player}")
-                    
                     p_data = filtered_df[filtered_df['Name'] == player].copy()
                     
                     if x_col == 'Sheet_Segment':
-                        # AVERAGE player performance per segment across all filtered matches
                         display_data = p_data.groupby('Sheet_Segment', sort=False)[selected_metrics].mean().reset_index()
-                        # Sort based on the selection order in sidebar
                         display_data['Sheet_Segment'] = pd.Categorical(display_data['Sheet_Segment'], categories=selected_sheets, ordered=True)
                         display_data = display_data.sort_values('Sheet_Segment')
                     else:
-                        # PROGRESSION across matches
-                        # Sort by original Journee index if possible, otherwise by string
                         display_data = p_data.sort_values(by='Match_Label').reset_index(drop=True)
                     
                     if display_data.empty:
-                        st.info(f"No data for {player} in selection.")
+                        st.info(f"No data found for {player}")
                         continue
 
-                    # Charting
-                    fig, axes = plt.subplots(len(selected_metrics), 1, figsize=(15, 6 * len(selected_metrics)))
+                    # UI Optimization: Reduce height and dead space
+                    fig, axes = plt.subplots(len(selected_metrics), 1, figsize=(14, 5 * len(selected_metrics)))
                     if len(selected_metrics) == 1: axes = [axes]
-                    fig.suptitle(f"Performance Analysis: {player}", fontsize=22, fontweight='bold', y=1.0)
+                    
+                    fig.suptitle(f"Performance Analysis: {player}", fontsize=20, fontweight='bold', y=0.98)
 
                     for i, metric in enumerate(selected_metrics):
                         ax = axes[i]
                         y = display_data[metric]
-                        x = display_data[x_col].astype(str)
+                        raw_x = display_data[x_col].astype(str)
+                        
+                        # Fix X-axis collision with text wrapping
+                        wrapped_x = [textwrap.fill(lx, width=12) for lx in raw_x]
                         
                         y_mean, y_max, y_min = y.mean(), y.max(), y.min()
 
-                        ax.plot(x, y, color=chart_color, linewidth=2.5, marker='o')
-                        ax.axhline(y_mean, color='gray', linestyle='--', alpha=0.6)
+                        ax.plot(wrapped_x, y, color=chart_color, linewidth=2.5, marker='o', markersize=6, alpha=0.8)
+                        ax.axhline(y_mean, color='gray', linestyle='--', alpha=0.5, linewidth=1.5)
                         
-                        # Markers for Max/Min
+                        # Max/Min markers
                         for idx, val in enumerate(y):
-                            if val == y_max: ax.scatter(x[idx], val, color='green', s=150, zorder=5, edgecolors='black')
-                            elif val == y_min: ax.scatter(x[idx], val, color='red', s=150, zorder=5, edgecolors='black')
+                            if val == y_max: ax.scatter(wrapped_x[idx], val, color='#2ecc71', s=120, zorder=5, edgecolors='black')
+                            elif val == y_min: ax.scatter(wrapped_x[idx], val, color='#e74c3c', s=120, zorder=5, edgecolors='black')
 
                         if show_labels:
-                            for xi, yi in zip(x, y):
-                                ax.text(xi, yi, f'{yi:.1f}', fontweight='bold', ha='center', va='bottom', fontsize=10)
+                            for xi, yi in zip(wrapped_x, y):
+                                ax.text(xi, yi, f'{yi:.1f}', fontweight='bold', ha='center', va='bottom', fontsize=9, color='#333')
 
-                        # External Legend
-                        handles = [
-                            Line2D([0], [0], color=chart_color, lw=2, label='Performance Trend'),
-                            Line2D([0], [0], color='gray', ls='--', label=f'Avg: {y_mean:.1f}'),
-                            Line2D([0], [0], marker='o', color='w', mfc='green', label=f'Max: {y_max:.1f}', mec='k'),
-                            Line2D([0], [0], marker='o', color='w', mfc='red', label=f'Min: {y_min:.1f}', mec='k')
-                        ]
-                        ax.legend(handles=handles, loc='upper left', bbox_to_anchor=(1.01, 1), title="Legend")
+                        # Clean design
+                        ax.spines['top'].set_visible(False)
+                        ax.spines['right'].set_visible(False)
+                        ax.grid(True, axis='y', linestyle=':', alpha=0.4)
+                        ax.set_facecolor('#fafafa')
                         
-                        title_text = f"AVG {metric}" if x_col == 'Sheet_Segment' else metric
-                        ax.set_title(title_text.upper(), loc='left', fontweight='bold', fontsize=14)
-                        ax.grid(True, axis='y', linestyle=':', alpha=0.5)
+                        # Legend setup
+                        handles = [
+                            Line2D([0], [0], color=chart_color, lw=2, marker='o', label='Trend'),
+                            Line2D([0], [0], color='gray', ls='--', label=f'Avg: {y_mean:.1f}'),
+                            Line2D([0], [0], marker='o', color='w', mfc='#2ecc71', label=f'Max: {y_max:.1f}', mec='k'),
+                            Line2D([0], [0], marker='o', color='w', mfc='#e74c3c', label=f'Min: {y_min:.1f}', mec='k')
+                        ]
+                        ax.legend(handles=handles, loc='upper left', bbox_to_anchor=(1.01, 1), frameon=False, fontsize=9)
+                        
+                        title_label = f"AVG {metric}" if x_col == 'Sheet_Segment' else metric
+                        ax.set_title(title_label.upper(), loc='left', fontweight='bold', fontsize=12, color='#444')
 
-                    plt.subplots_adjust(right=0.8, hspace=0.4, top=0.92)
+                    # Final spacing optimization
+                    plt.subplots_adjust(right=0.82, hspace=0.35, top=0.93)
                     st.pyplot(fig)
                     pdf.savefig(fig, bbox_inches='tight')
                     plt.close(fig)
 
-            st.sidebar.download_button("📥 Download PDF Report", pdf_buffer.getvalue(), "Report.pdf", use_container_width=True)
+            st.sidebar.download_button("📥 Download PDF Report", pdf_buffer.getvalue(), f"{player}_Report.pdf", use_container_width=True)
 else:
     st.info("Please upload an Excel file to start.")
